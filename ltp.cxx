@@ -45,7 +45,7 @@ int physics_init(bool restarting)
 	Coordinates *coords = mesh->coordinates();
 	Options *options = Options::getRoot();
 	options = options->getSection("ltp");
-    OPTION(options, L0,  1.0);
+	OPTION(options, L0,  1.0);
 	OPTION(options, w0,  1e4);
 	OPTION(options, n0,  1e15);
 	OPTION(options, T0,  1.0);
@@ -121,7 +121,7 @@ int physics_run(BoutReal t)
 	Ng = floor(Ng,1e-5);
 
 	// invert Poisson equation
-    phi = phiSolver->solve(Ni-Ne);
+	phi = phiSolver->solve(Ni-Ne);
 	mesh->communicate(phi);
 	phiext = Eext * linear * cos(Efreq * t);
 	total_phi = phi + phiext;
@@ -150,7 +150,7 @@ int physics_run(BoutReal t)
 		ddt(Ne) += -Ne * Ni * 0.01 * NeE;
 		ddt(Ne) += Ni * Ng * 0.01 * NeE;
 		ddt(Ne) += Ne * Ng * 0.001 * NeE;
-	    // Density source from interactions
+		// Density source from interactions
 		// BoutReal R_rc  = hydrogen.recombination(Ne*n0, Te*T0)*SQ(Ne) * n0 / w0;
 		// BoutReal R_iz = Ne*Nn_C*hydrogen.ionisation(Te_C*Tnorm) * Nnorm / Omega_ci;
 	}
@@ -164,7 +164,7 @@ int physics_run(BoutReal t)
 		ddt(Ni) += -Ne * Ni * 0.01 * NeE;
 		ddt(Ni) += Ni * Ng * 0.01 * NeE;
 		ddt(Ni) += Ne * Ng * 0.001 * NeE;
-	    // Density source from interactions
+		// Density source from interactions
 		// BoutReal R_rc  = hydrogen.recombination(Ne*n0, Te*T0)*SQ(Ne) * n0 / w0;
 		// BoutReal R_iz = Ne*Nn_C*hydrogen.ionisation(Te_C*Tnorm) * Nnorm / Omega_ci;
 	}
@@ -255,16 +255,16 @@ const Field3D Div_Perp_Lap_FV(const Field3D &a, const Field3D &f, bool xflux) {
   //////////////////////////////////////////
   // X-Z diffusion
   //
-  //            Z
-  //            |
+  //			Z
+  //			|
   //
-  //     o --- gU --- o
-  //     |     nU     |
-  //     |            |
-  //    gL nL      nR gR    -> X
-  //     |            |
-  //     |     nD     |
-  //     o --- gD --- o
+  //	 o --- gU --- o
+  //	 |	 nU	 |
+  //	 |			|
+  //	gL nL	  nR gR	-> X
+  //	 |			|
+  //	 |	 nD	 |
+  //	 o --- gD --- o
   //
 
 
@@ -272,38 +272,38 @@ const Field3D Div_Perp_Lap_FV(const Field3D &a, const Field3D &f, bool xflux) {
   Field3D as = a;
 
   for(int i=mesh->xstart;i<=mesh->xend;i++)
-    for(int j=mesh->ystart;j<=mesh->yend;j++)
-      for(int k=0;k<mesh->LocalNz;k++) {
-        int kp = (k+1) % (mesh->LocalNz);
+	for(int j=mesh->ystart;j<=mesh->yend;j++)
+	  for(int k=0;k<mesh->LocalNz;k++) {
+		int kp = (k+1) % (mesh->LocalNz);
 		int km = (k-1+mesh->LocalNz) % (mesh->LocalNz);
 		//output<<kp<<" "<<km<<"\n";
 
-        // Calculate gradients on cell faces
-        BoutReal gR = (coords->g11(i,j) + coords->g11(i+1,j)) * (fs(i+1,j,k) - fs(i,j,k))/(coords->dx(i+1,j) + coords->dx(i,j));
-        BoutReal gL = (coords->g11(i-1,j) + coords->g11(i,j))*(fs(i,j,k) - fs(i-1,j,k))/(coords->dx(i-1,j) + coords->dx(i,j));
-        BoutReal gD = coords->g33(i,j)*(fs(i,j,k) - fs(i,j,km))/coords->dz;
-        BoutReal gU = coords->g33(i,j)*(fs(i,j,kp) - fs(i,j,k))/coords->dz;
+		// Calculate gradients on cell faces
+		BoutReal gR = (coords->g11(i,j) + coords->g11(i+1,j)) * (fs(i+1,j,k) - fs(i,j,k))/(coords->dx(i+1,j) + coords->dx(i,j));
+		BoutReal gL = (coords->g11(i-1,j) + coords->g11(i,j))*(fs(i,j,k) - fs(i-1,j,k))/(coords->dx(i-1,j) + coords->dx(i,j));
+		BoutReal gD = coords->g33(i,j)*(fs(i,j,k) - fs(i,j,km))/coords->dz;
+		BoutReal gU = coords->g33(i,j)*(fs(i,j,kp) - fs(i,j,k))/coords->dz;
 
-        // Flow right
-        BoutReal flux = gR * 0.25*(coords->J(i+1,j) + coords->J(i,j)) *(as(i+1,j,k) + as(i,j,k));
-        result(i,j,k)   += flux / (coords->dx(i,j)*coords->J(i,j));
-        //result(i+1,j,k) -= flux / (mesh->dx(i+1,j)*mesh->J(i+1,j));
+		// Flow right
+		BoutReal flux = gR * 0.25*(coords->J(i+1,j) + coords->J(i,j)) *(as(i+1,j,k) + as(i,j,k));
+		result(i,j,k)   += flux / (coords->dx(i,j)*coords->J(i,j));
+		//result(i+1,j,k) -= flux / (mesh->dx(i+1,j)*mesh->J(i+1,j));
 
-        // Flow left
-        flux = gL * 0.25*(coords->J(i-1,j) + coords->J(i,j)) *(as(i-1,j,k) + as(i,j,k));
-        result(i,j,k)   -= flux / (coords->dx(i,j)*coords->J(i,j));
-        //result(i-1,j,k) += flux / (mesh->dx(i+1,j)*mesh->J(i+1,j));
+		// Flow left
+		flux = gL * 0.25*(coords->J(i-1,j) + coords->J(i,j)) *(as(i-1,j,k) + as(i,j,k));
+		result(i,j,k)   -= flux / (coords->dx(i,j)*coords->J(i,j));
+		//result(i-1,j,k) += flux / (mesh->dx(i+1,j)*mesh->J(i+1,j));
 
-        // Flow up
-        flux = gU * 0.5*(as(i,j,k) + as(i,j,kp)) / coords->dz;
-        result(i,j,k) += flux;
-        //result(i,j,kp) -= flux;
+		// Flow up
+		flux = gU * 0.5*(as(i,j,k) + as(i,j,kp)) / coords->dz;
+		result(i,j,k) += flux;
+		//result(i,j,kp) -= flux;
 
 		// Flow down
-        flux = gD * 0.5*(as(i,j,k) + as(i,j,km)) / coords->dz;
-        result(i,j,k) -= flux;
-        //result(i,j,km) += flux;
-      }
+		flux = gD * 0.5*(as(i,j,k) + as(i,j,km)) / coords->dz;
+		result(i,j,k) -= flux;
+		//result(i,j,km) += flux;
+	  }
 
   return result;
 }
