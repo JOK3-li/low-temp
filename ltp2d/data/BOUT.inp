@@ -1,0 +1,94 @@
+# settings file for BOUT++
+#
+# Low temperature plasma between electrodes
+
+##################################################
+# settings used by the core code
+NOUT = 100         # number of time-steps
+TIMESTEP = 0.5    # time between outputs
+
+# number of points in z direction (2^n + 1)
+ZMIN = 0.0
+ZMAX = 0.01
+
+MXG = 2
+
+[mesh]
+nz = 129
+
+nx = 128
+dx = PI/100 / (nx-4)
+
+ny = 2
+dy = 1
+
+##################################################
+# derivative methods
+[mesh:ddx]
+first = C4  # order of first x derivatives (options are 2 or 4)
+second = C4 # order of second x derivatives (2 or 4)
+upwind = U1 # order of upwinding method (1, 4, or 0 = TVD)
+
+[mesh:ddy]
+first = C4
+second = C2
+upwind = U1
+
+[mesh:ddz]
+first = C4
+second = C2
+upwind = U1
+
+##################################################
+# Solver settings
+[solver]
+# mudq, mldq, mukeep, mlkeep preconditioner options
+ATOL = 1.0e-10 # absolute tolerance
+RTOL = 1.0e-5  # relative tolerance
+
+[phiSolver]
+inner_boundary_flags = 0
+outer_boundary_flags = 0
+
+all_terms = true
+nonuniform = true   # NOTE: Necessary to avoid numerical instability
+
+##################################################
+# settings for gas_compress
+[ltp]
+w0 = 1e8         # Hz
+n0 = 1e16        # m^-3
+L0 = 0.001       # m
+T0 = 10          # eV
+Eext = 2e6 #300  # V/m
+Efreq = 13.56e6  # Hz
+
+evolve_Ne = true
+evolve_Ni = true
+evolve_NeE = true
+
+[All]
+scale = 1.0 # default size of initial perturbations
+bndry_all = neumann # Set all boundaries to Neumann
+
+[Ng]
+scale = 1e18
+function = 1.
+
+[Ne]
+scale = 1e16
+function = 1. #* gauss(z - PI, 0.5)
+bndry_all = dirichlet
+
+[Ni]
+scale = 1e16
+function = 1. #* gauss(z - PI, 0.5)
+bndry_all = dirichlet
+
+[NeE]
+scale = 1e16
+function = 1. #* gauss(z - PI, 0.5)
+
+[linear]
+xx = x#-0.5
+function = xx * gauss(PI-z) #xx * H(2*PI/3-z) * 2.5 * gauss(z - 2*PI/3) + xx * H(z-4*PI/3) * 2.5 * gauss(z - 4*PI/3) + xx * H(z-2*PI/3) * H(4*PI/3-z)
