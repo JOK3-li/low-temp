@@ -4,50 +4,16 @@
  * J. Leddy, April 2017
  *******************************************************************/
 
-#include <bout.hxx>
-#include <bout/physicsmodel.hxx>
-#include <bout/constants.hxx>
-#include <boutmain.hxx>
-#include <invert_laplace.hxx>
-#include <bout/invert/laplacexz.hxx>
-#include <derivs.hxx>
-#include <initialprofiles.hxx>
-#include "radiation.hxx"
+ #include "ltp.hxx"
 
-Field3D Ne, NeE;		 // electron density and energy and particle flux
-Field3D Ng;				// Gas density
-Field3D Ni; 			// ion density
-Field3D Te, E; 			// Temeprature
-Field3D phi, phiext, total_phi;		// potential
-Field3D Sn, Se; 		// density and temperature sources due to interactions
-Field3D linear;			// linear function in X
+ #include <initialprofiles.hxx>
+ #include <derivs.hxx>
+ #include <field_factory.hxx>
+ #include <invert_parderiv.hxx>
+ #include <bout/constants.hxx>
+ #include <bout/assert.hxx>
 
-// Laplacian inversion
-Laplacian *phiSolver; // Old Laplacian in X-Z
-
-// parameters
-BoutReal mu_e, mu_i, Dn, De, Ti, nu;
-BoutReal w0, L0, n0, v0, T0;	// normalisations
-BoutReal phimag, Efreq;  // imposed field
-bool evolve_Ne, evolve_Ni, evolve_NeE, evolve_Ng;
-
-// neutral interaction
-UpdatedRadiatedPower hydrogen; // Atomic rates (H.Willett)
-Field3D S,F,Q,R;
-Field3D Riz,Rrc,Rcx;
-BoutReal Eionize;
-
-const Field3D Div_Perp_Lap_FV(const Field3D &a, const Field3D &f, const Field3D &bndry_flux);
-void neutral_rates(const Field3D &Ne, const Field3D &Te, const Field3D &Vi,const Field3D &Nn, const Field3D &Tn, const Field3D &Vnpar,
-                      Field3D &S, Field3D &F, Field3D &Q, Field3D &R,Field3D &Riz, Field3D &Rrc, Field3D &Rcx);
-
-const BoutReal ee = 1.60217662e-19; // C
-const BoutReal eps0 = 8.854187817e-12; // vacuum permitivity
-const BoutReal Mn = 6.6335209e-26; // kg
-const BoutReal Me = 9.10938356e-31; // kg
-const BoutReal k_B = 1.38064852e-23; // boltzmann constant
-
-int physics_init(bool restarting)
+int ltp::init(bool restarting)
 {
 	// read options
 	Coordinates *coords = mesh->coordinates();
@@ -57,6 +23,7 @@ int physics_init(bool restarting)
 	OPTION(options, w0,  1e4);
 	OPTION(options, n0,  1e15);
 	OPTION(options, T0,  1.0);
+	OPTION(options, v0,  1.0);
 	OPTION(options, phimag,  0.0);
 	OPTION(options, Efreq,  0.0);
 	OPTION(options, evolve_Ne, true);
@@ -93,27 +60,38 @@ int physics_init(bool restarting)
 		bout_solve(Ni, "Ni");
 	}
 	SAVE_REPEAT4(phiext,total_phi,phi,E);
-	SAVE_ONCE2(phimag,Efreq);
+	SAVE_REPEAT(nu);
+	SAVE_ONCE3(phimag,Efreq,v0);
 	SAVE_ONCE4(w0,T0,n0,L0);
 
+	/////////////////////////
 	// Normalisations
-	v0 = ee / eps0; // voltage normalisation
+	// Evolving variables
+	Ne /= n0;
+	Ni /= n0;
+	NeE /= n0*T0;
+
+	// Derived variables
 	Ti /= T0;
+	Ng /= n0;
+
+	// physics quantities
 	mu_i *= v0 / (w0 * L0 * L0);
 	mu_e *= v0 / (w0 * L0 * L0);
 	Dn /= w0*L0*L0;
 	De /= w0*L0*L0;
+
+	// grid
 	coords->dx /= L0;
 	coords->dz /= L0;
-	coords->J = 1.0;
+	// coords->J = coords->dx;
+
+	// source
 	phimag /= v0;
 	Efreq *= 2. * PI / w0;
-	Ne /= n0;
-	Ni /= n0;
-	Ng /= n0;
-	NeE /= n0;
 
-	// initial potential
+	///////////////////////////////////////////
+	// Initialise potential
 	phi = 0.0;
 	phiext = 0.0;
 	total_phi = 0.0;
@@ -122,8 +100,7 @@ int physics_init(bool restarting)
 	return 0;
 }
 
-int physics_run(BoutReal t)
-{
+int ltp::rhs(BoutReal t) {
 	mesh->communicate(Ne,Ni,NeE,Ng);//,Fex,Fix,Fez,Fiz);
 
 	Ne = floor(Ne,1e-5);
@@ -132,7 +109,8 @@ int physics_run(BoutReal t)
 	Ng = floor(Ng,1e-5);
 
 	// invert Poisson equation
-	phi = phiSolver->solve(Ni-Ne);
+	TRACE("Potential inversion");
+	phi = phiSolver->solve(Ne-Ni);
 	mesh->communicate(phi);
 	phiext = phimag * linear * sin(Efreq * t);
 	total_phi = phi + phiext;
@@ -143,279 +121,354 @@ int physics_run(BoutReal t)
 	Te = 2.*E/3.;
 	Field3D zero = 0.0;
 
+	// Sheath boundary conditions
+	// BoundaryRegion *bndry;
+	// for(bndry->first(); !bndry->isDone(); bndry->nextX()) {
+	// 	BoutReal dNedx = DDX(Ne)[bndry->x][bndry->y]
+	// 	Ne[bndry->x - bndry->bx][bndry->y] = 0.25 * sqrt(Te) * dNedx
+	// }
+
 	// Gas continuity equation
+	TRACE("Neutral density equation");
 	ddt(Ng) = 0.0;
 	if(evolve_Ng) {
 		// Electron density
 		ddt(Ng) += -Div_Perp_Lap_FV(Dn,Ng,zero);
-		ddt(Ng) += Ne * Ni * 0.01 * NeE;
-		ddt(Ng) += -Ne * Ng * 0.001 * NeE;
 	}
 
 	// Electron continuity equation
+	TRACE("Electron density equation");
 	ddt(Ne) = 0.0;
 	if(evolve_Ne) {
 		// Electron density
 		ddt(Ne) += -Div_Perp_Lap_FV(-Ne*mu_e,total_phi,0.25*Ne*sqrt(Te));
 		ddt(Ne) += -Div_Perp_Lap_FV(Dn,Ne,zero);
-		// Density source/sink from interactions
-		ddt(Ne) += -Ne * Ni * 0.01 * NeE; //-Ne * Ni * recombination(Ne*n0, Te*T0) * n0 / w0;
-		ddt(Ne) += Ne * Ng * 0.001 * NeE; // Ne * Ng * ionisation(Te*Tnorm) * n0 / w0;
 	}
 
 	// Ion continuity equation
+	TRACE("Ion density equation");
 	ddt(Ni) = 0.0;
 	if(evolve_Ni) {
 		// Ion density
 		ddt(Ni) += -Div_Perp_Lap_FV(Ni*mu_i,total_phi,0.25*Ni*sqrt(Ti));
 		ddt(Ni) += -Div_Perp_Lap_FV(Dn,Ni,zero);
-		// Density source/sink from interactions
-		ddt(Ni) += -Ne * Ni * 0.01 * NeE; //-Ne * Ni * recombination(Ne*n0, Te*T0) * n0 / w0;
-		ddt(Ni) += Ne * Ng * 0.001 * NeE; // Ne * Ng * ionisation(Te*Tnorm) * n0 / w0;
 	}
 
 	// Electron energy density equation
+	TRACE("Energy density equation");
 	ddt(NeE) = 0.0;
 	if(evolve_NeE) {
 		// Energy density
 		ddt(NeE) += Div_Perp_Lap_FV(5./3.*NeE*mu_e,total_phi,5./12.*NeE*sqrt(Ti));
 		ddt(NeE) += -Div_Perp_Lap_FV(5./3.*E*Dn,Ne,zero);
 		ddt(NeE) += -Div_Perp_Lap_FV(5./3.*Ne*De,E,zero);
+		// ddt(NeE) += -Ne*mu_e*DDX(total_phi)*DDX(total_phi);
 
 		// Energy source from interactions
-		Se = 0.0; // Ne * Ng * excitation(Te*Tnorm) * n0 / w0;
+		nu = 0.0;
+		for(int i=mesh->xstart;i<=mesh->xend;i++) {
+			for(int j=mesh->ystart;j<=mesh->yend;j++) {
+				for(int k=0;k<mesh->LocalNz;k++) {
+					nu(i,j,k) = Ng(i,j,k) * (2.336e-14*pow(Te(i,j,k)*T0,1.609) *
+						exp(0.0618*pow(log(Te(i,j,k)*T0),2) - 0.1171*pow(log(Te(i,j,k)*T0),3))) * n0 / w0;
+				}
+			}
+		}
+		ddt(NeE) += 3. * Me/Mn * nu * Ne * (Te - Ti);
+	}
 
-		ddt(NeE) += 3. * Me/Mn * k_B * nu * Ne * (Te - Ti);
-		ddt(NeE) += Se;
+	TRACE("Calculate neutral rates");
+	Field3D Riz, Rrc, Rcx;
+	neutral_rates(Ne, Te, Ng, Ti, S, F, Q, Rp, Riz, Rrc, Rcx);
+
+	/////////////////////////////////////////////////////
+	// Neutral density source
+	TRACE("Neutral density");
+	if(evolve_Ng) {
+		ddt(Ng) += S; // Sink of plasma density
+	}
+	if(evolve_Ni) {
+		ddt(Ni) -= S; // Sink of plasma density
+	}
+	if(evolve_Ne) {
+		ddt(Ne) -= S; // Sink of plasma density
+	}
+
+	/////////////////////////////////////////////////////
+	// Neutral pressure
+	TRACE("Neutral energy density");
+	if(evolve_NeE) {
+		ddt(NeE) -= Q + Rp; // originally Pe (NeTe), need to figure out how to make this for NeE -> (2./3) * (Q + Rp) originally
 	}
 
 	return 0;
 }
 
 // Div ( a * Grad_perp(f) )
-const Field3D Div_Perp_Lap_FV(const Field3D &a, const Field3D &f, const Field3D &bndry_flux) {
+const Field3D ltp::Div_Perp_Lap_FV(const Field3D &a, const Field3D &f, const Field3D &bndry_flux) {
 
-  Coordinates *coords = mesh->coordinates();
-  Field3D result = 0.0;
+	Coordinates *coords = mesh->coordinates();
+	Field3D result = 0.0;
 
-  //////////////////////////////////////////
-  // X-Z diffusion
-  //
-  //			Z
-  //			|
-  //
-  //	 o --- gU --- o
-  //	 |	 nU	 |
-  //	 |			|
-  //	gL nL	  nR gR	-> X
-  //	 |			|
-  //	 |	 nD	 |
-  //	 o --- gD --- o
-  //
+	//////////////////////////////////////////
+	// d/dx(a * d/dx(f))
+	//
+	//
+	//			f_i				f_j				f_k
+	//  		a_i				a_j				a_k
+	//				  df_ij/dx		  df_jk/dx
+	//					F_ij			F_jk
+	//		  dF_ij/dx				  dF_ij/dx
+	//   |-------o-------|-------o-------|-------o-------|
+	//			 i				 j				 k
+	//
+	//
 
+	Field3D fs = f;
+	Field3D as = a;
 
-  Field3D fs = f;
-  Field3D as = a;
+	BoutReal Globaldx = mesh->GlobalX(1) - mesh->GlobalX(0);
 
-  for(int i=mesh->xstart;i<=mesh->xend;i++)
-	for(int j=mesh->ystart;j<=mesh->yend;j++)
-	  for(int k=0;k<mesh->LocalNz;k++) {
+	for(int i=mesh->xstart;i<=mesh->xend;i++) {
+		for(int j=mesh->ystart;j<=mesh->yend;j++) {
+			for(int k=0;k<mesh->LocalNz;k++) {
 
-		// Calculate gradients on cell faces
-		BoutReal gR = (coords->g11(i,j) + coords->g11(i+1,j)) * (fs(i+1,j,k) - fs(i,j,k))/(coords->dx(i+1,j) + coords->dx(i,j));
-		BoutReal gL = (coords->g11(i-1,j) + coords->g11(i,j))*(fs(i,j,k) - fs(i-1,j,k))/(coords->dx(i-1,j) + coords->dx(i,j));
+				// Calculate gradients on cell faces
+				BoutReal gR = (fs(i+1,j,k) - fs(i,j,k)) / (coords->dx(i+1,j) + coords->dx(i,j));
+				BoutReal gL = (fs(i,j,k) - fs(i-1,j,k)) / (coords->dx(i-1,j) + coords->dx(i,j));
 
-		// Flow right
-		BoutReal flux = gR * 0.25*(coords->J(i+1,j) + coords->J(i,j)) *(as(i+1,j,k) + as(i,j,k));
-		if(i==mesh->xend) {
-			if(flux<0.0){
-				flux = 0.0;
+				// Flow out of right face
+				BoutReal fluxR = gR * 0.5 * (as(i+1,j,k) + as(i,j,k));
+				if(mesh->GlobalX(i)>1-Globaldx) {
+					// output<<mesh->GlobalX(i)<<"  "<<i<<"\n";
+					if(fluxR<0.0){
+						fluxR = 0.0;
+					}
+					fluxR += bndry_flux(i,j,k);
+				}
+
+				// Flow into left face
+				BoutReal fluxL = gL * 0.5 * (as(i-1,j,k) + as(i,j,k));
+				if(mesh->GlobalX(i)<Globaldx) {
+					// output<<mesh->GlobalX(i)<<"  "<<i<<"\n";
+					if(fluxL>0.0) {
+						fluxL = 0.0;
+					}
+					fluxL += -bndry_flux(i,j,k);
+				}
+
+				// Divergence of flux on cell centre
+				result(i,j,k) = (fluxR - fluxL) / coords->dx(i,j);
 			}
-			flux += bndry_flux(i,j,k); //+
 		}
-		result(i,j,k) += flux / (coords->dx(i,j)*coords->J(i,j));
-		//result(i+1,j,k) -= flux / (mesh->dx(i+1,j)*mesh->J(i+1,j));
+	}
 
-		// Flow left
-		flux = gL * 0.25*(coords->J(i-1,j) + coords->J(i,j)) *(as(i-1,j,k) + as(i,j,k));
-		if(i==mesh->xstart) {
-			if(flux>0.0) {
-				flux = 0.0;
-			}
-			flux += -bndry_flux(i,j,k); //-
-		}
-		result(i,j,k) -= flux / (coords->dx(i,j)*coords->J(i,j));
-		//result(i-1,j,k) += flux / (mesh->dx(i+1,j)*mesh->J(i+1,j));
-	  }
-
-  return result;
+	return result;
 }
 
-void neutral_rates(const Field3D &Ne, const Field3D &Te, const Field3D &Vi,    // Plasma quantities
-                      const Field3D &Nn, const Field3D &Tn, const Field3D &Vnpar, // Neutral gas
-                      Field3D &S, Field3D &F, Field3D &Q, Field3D &R,  // Transfer rates
-                      Field3D &Riz, Field3D &Rrc, Field3D &Rcx) {       // Rates
+// Div ( a * Grad_perp(f) )
+const Field3D ltp::Div_Perp_Lap_FV4(const Field3D &a, const Field3D &f, const Field3D &bndry_flux) {
 
-  // Allocate output fields
-  /*
-  S.allocate();
-  F.allocate();
-  Q.allocate();
-  R.allocate();
+	Coordinates *coords = mesh->coordinates();
+	Field3D result = 0.0;
 
-  Riz.allocate();
-  Rrc.allocate();
-  Rcx.allocate();
-  */
-  S = 0.0;
-  F = 0.0;
-  Q = 0.0;
-  R = 0.0;
+	//////////////////////////////////////////
+	// d/dx(a * d/dx(f))
+	//
+	//
+	//			f_i				f_j				f_k
+	//  		a_i				a_j				a_k
+	//				  df_ij/dx		  df_jk/dx
+	//					F_ij			F_jk
+	//		  dF_ij/dx				  dF_ij/dx
+	//   |-------o-------|-------o-------|-------o-------|
+	//			 i				 j				 k
+	//
+	//
 
-  Riz = 0.0;
-  Rrc = 0.0;
-  Rcx = 0.0;
+	Field3D fs = f;
+	Field3D as = a;
 
-  for(int i=mesh->xstart;i<=mesh->xend;i++)
-    for(int j=mesh->ystart;j<=mesh->yend;j++)
-      for(int k=0;k<mesh->LocalNz-1;k++) {
-        // Integrate rates over each cell in Y
-        // NOTE: This should integrate over (x,y,z)
+	BoutReal Globaldx = mesh->GlobalX(1) - mesh->GlobalX(0);
 
-        // Calculate cell centre (C), left (L) and right (R) values
-        BoutReal Te_C = Te(i,j,k), Te_L = 0.5*(Te(i,j-1,k) + Te(i,j,k)), Te_R = 0.5*(Te(i,j,k) + Te(i,j+1,k));
-        BoutReal Ne_C = Ne(i,j,k), Ne_L = 0.5*(Ne(i,j-1,k) + Ne(i,j,k)), Ne_R = 0.5*(Ne(i,j,k) + Ne(i,j+1,k));
-        BoutReal Vi_C = Vi(i,j,k), Vi_L = 0.5*(Vi(i,j-1,k) + Vi(i,j,k)), Vi_R = 0.5*(Vi(i,j,k) + Vi(i,j+1,k));
-        BoutReal Tn_C = Tn(i,j,k), Tn_L = 0.5*(Tn(i,j-1,k) + Tn(i,j,k)), Tn_R = 0.5*(Tn(i,j,k) + Tn(i,j+1,k));
-        BoutReal Nn_C = Nn(i,j,k), Nn_L = 0.5*(Nn(i,j-1,k) + Nn(i,j,k)), Nn_R = 0.5*(Nn(i,j,k) + Nn(i,j+1,k));
-        BoutReal Vn_C = Vnpar(i,j,k), Vn_L = 0.5*(Vnpar(i,j-1,k) + Vnpar(i,j,k)), Vn_R = 0.5*(Vnpar(i,j,k) + Vnpar(i,j+1,k));
+	for(int i=mesh->xstart;i<=mesh->xend;i++) {
+		for(int j=mesh->ystart;j<=mesh->yend;j++) {
+			for(int k=0;k<mesh->LocalNz;k++) {
 
-        if(Ne_C < 0.) Ne_C = 0.0;
-        if(Ne_L < 0.) Ne_L = 0.0;
-        if(Ne_R < 0.) Ne_R = 0.0;
-        if(Nn_C < 0.) Nn_C = 0.0;
-        if(Nn_L < 0.) Nn_L = 0.0;
-        if(Nn_R < 0.) Nn_R = 0.0;
+				// Calculate gradients on cell faces
+				BoutReal gR = 2. * ((fs(i-1,j,k)+fs(i,j,k))/24. - 2./3.*fs(i,j,k) + 2./3.*fs(i+1,j,k) - (fs(i+1,j,k)+fs(i+2,j,k))/24.) / coords->dx(i,j);
+				BoutReal gL = 2. * ((fs(i-2,j,k)+fs(i-1,j,k))/24. - 2./3.*fs(i-1,j,k) + 2./3.*fs(i,j,k) - (fs(i,j,k)+fs(i+1,j,k))/24.) / coords->dx(i,j);
 
-        // Jacobian (Cross-sectional area)
-		Coordinates *coords = mesh->coordinates();
-        BoutReal J_C = coords->J(i,j), J_L = 0.5*(coords->J(i,j-1) + coords->J(i,j)), J_R = 0.5*(coords->J(i,j) + coords->J(i,j+1));
+				// Flow out of right face
+				BoutReal fluxR = gR * 0.5 * (as(i+1,j,k) + as(i,j,k));
+				if(mesh->GlobalX(i)>1-Globaldx) {
+					// output<<mesh->GlobalX(i)<<"  "<<i<<"\n";
+					if(fluxR<0.0){
+						fluxR = 0.0;
+					}
+					fluxR += bndry_flux(i,j,k);
+				}
 
-        ///////////////////////////////////////////
-        // Charge exchange
+				// Flow into left face
+				BoutReal fluxL = gL * 0.5 * (as(i-1,j,k) + as(i,j,k));
+				if(mesh->GlobalX(i)<Globaldx) {
+					// output<<mesh->GlobalX(i)<<"  "<<i<<"\n";
+					if(fluxL>0.0) {
+						fluxL = 0.0;
+					}
+					fluxL += -bndry_flux(i,j,k);
+				}
 
-        BoutReal R_cx_L = Ne_L*Nn_L*hydrogen.chargeExchange(Te_L*T0) * (n0 / w0);
-        BoutReal R_cx_C = Ne_C*Nn_C*hydrogen.chargeExchange(Te_C*T0) * (n0 / w0);
-        BoutReal R_cx_R = Ne_R*Nn_R*hydrogen.chargeExchange(Te_R*T0) * (n0 / w0);
+				// Divergence of flux on cell centre
+				result(i,j,k) = (fluxR - fluxL) / coords->dx(i,j);
+			}
+		}
+	}
 
-        // Power transfer from plasma to neutrals
-        // Factor of 3/2 to convert temperature to energy
-
-        Q(i,j,k) =(3./2)* (
-                                J_L * (Te_L - Tn_L)*R_cx_L
-                           + 4.*J_C * (Te_C - Tn_C)*R_cx_C
-                           +    J_R * (Te_R - Tn_R)*R_cx_R
-                           ) / (6. * J_C);
-
-        // Plasma-neutral friction
-        F(i,j,k) =(
-                        J_L * (Vi_L - Vn_L)*R_cx_L
-                   + 4.*J_C * (Vi_C - Vn_C)*R_cx_C
-                   +    J_R * (Vi_R - Vn_R)*R_cx_R
-                   ) / (6. * J_C);
-
-        // Cell-averaged rate
-        Rcx(i,j,k) = (
-                             J_L * R_cx_L
-                      + 4. * J_C * R_cx_C
-                      +      J_R * R_cx_R
-                      ) / (6. * J_C);
-
-        ///////////////////////////////////////
-        // Recombination
-
-        BoutReal R_rc_L  = hydrogen.recombination(Ne_L*n0, Te_L*T0)*SQ(Ne_L) * n0 / w0;
-        BoutReal R_rc_C  = hydrogen.recombination(Ne_C*n0, Te_C*T0)*SQ(Ne_C) * n0 / w0;
-        BoutReal R_rc_R  = hydrogen.recombination(Ne_R*n0, Te_R*T0)*SQ(Ne_R) * n0 / w0;
-
-        // Radiated power from plasma
-        // Factor of 1.09 so that recombination becomes an energy source at 5.25eV
-        R(i,j,k) = (
-                         J_L * (1.09*Te_L - 13.6/T0)*R_rc_L
-                    + 4.*J_C * (1.09*Te_C - 13.6/T0)*R_rc_C
-                    +    J_R * (1.09*Te_R - 13.6/T0)*R_rc_R
-                    ) / (6. * J_C);
-
-        // Plasma sink / neutral source
-        S(i,j,k) = (
-                          J_L * R_rc_L
-                    + 4.* J_C * R_rc_C
-                    +     J_R * R_rc_R
-                    ) / (6. * J_C);
-
-        // Transfer of ion momentum to neutrals
-        F(i,j,k) += (
-                           J_L * Vi_L * R_rc_L
-                     + 4.* J_C * Vi_C * R_rc_C
-                     +     J_R * Vi_R * R_rc_R
-                     ) / (6. * J_C);
-
-        // Transfer of ion energy to neutrals
-        Q(i,j,k) +=(3./2) * (
-                                  J_L * Te_L * R_rc_L
-                             + 4.*J_C * Te_C * R_rc_C
-                             +    J_R * Te_R * R_rc_R
-                             ) / (6. * J_C);
-
-        // Cell-averaged rate
-        Rrc(i,j,k) = (
-                             J_L * R_rc_L
-                      + 4. * J_C * R_rc_C
-                      +      J_R * R_rc_R
-                      ) / (6. * J_C);
-
-        ///////////////////////////////////////
-        // Ionisation
-
-        BoutReal R_iz_L = Ne_L*Nn_L*hydrogen.ionisation(Te_L*T0) * n0 / w0;
-        BoutReal R_iz_C = Ne_C*Nn_C*hydrogen.ionisation(Te_C*T0) * n0 / w0;
-        BoutReal R_iz_R = Ne_R*Nn_R*hydrogen.ionisation(Te_R*T0) * n0 / w0;
-
-        // Neutral sink, plasma source
-        S(i,j,k) -=  (
-                            J_L * R_iz_L
-                      + 4.* J_C * R_iz_C
-                      +     J_R * R_iz_R
-                      ) / (6. * J_C);
-
-        // Transfer of neutral momentum to ions
-        F(i,j,k) -= (
-                            J_L * Vn_L * R_iz_L
-                     + 4. * J_C * Vn_C * R_iz_C
-                     +      J_R * Vn_R * R_iz_R
-                     ) / (6. * J_C);
-
-        // Transfer of neutral energy to ions
-        Q(i,j,k) -= (3./2)* (
-                                    J_L * Tn_L * R_iz_L
-                             + 4. * J_C * Tn_C * R_iz_C
-                             +      J_R * Tn_R * R_iz_R
-                             ) / (6. * J_C);
-
-        // Ionisation and electron excitation energy
-        R(i,j,k) += (Eionize/T0) * (
-                                            J_L * R_iz_L
-                                       + 4.*J_C * R_iz_C
-                                       +    J_R * R_iz_R
-                                       ) / (6. * J_C);
-
-        // Cell-averaged rate
-        Riz(i,j,k) = (
-                             J_L * R_iz_L
-                      + 4. * J_C * R_iz_C
-                      +      J_R * R_iz_R
-                      ) / (6. * J_C);
-
-
-      }
+	return result;
 }
+
+// const Field3D Div_n_bxGrad_f_B_XPPM(const Field3D &n_in, const Field3D &f_in) {
+// 	Field3D result = 0;
+//
+// 	//////////////////////////////////////////
+// 	// X-Z advection.
+// 	//
+// 	//             Z
+// 	//             |
+// 	//
+// 	//    fmp --- vU --- fpp
+// 	//     |      nU      |
+// 	//     |               |
+// 	//    vL nL        nR vR    -> X
+// 	//     |               |
+// 	//     |      nD       |
+// 	//    fmm --- vD --- fpm
+// 	//
+//
+// 	Field3D n = n_in;  // Done in orthogonal X-Z coordinates
+// 	Field3D f = f_in;
+//
+// 	for(int i=mesh->xstart;i<=mesh->xend;i++)
+//       for(int j=mesh->ystart;j<=mesh->yend;j++)
+//         for(int k=0;k<mesh->ngz-1;k++) {
+// 		int kp = (k+1) % (mesh->ngz-1);
+// 		int kpp = (kp+1) % (mesh->ngz-1);
+// 		int km = (k-1+mesh->ngz-1) % (mesh->ngz-1);
+// 		int kmm = (km-1+mesh->ngz-1) % (mesh->ngz-1);
+//
+// 		// 1) Interpolate stream function f onto corners fmp, fpp, fpm
+//
+// 		BoutReal fmm = 0.25*(f(i,j,k) + f(i-1,j,k) + f(i,j,km) + f(i-1,j,km));
+// 		BoutReal fmp = 0.25*(f(i,j,k) + f(i,j,kp) + f(i-1,j,k) + f(i-1,j,kp)); // 2nd order accurate
+// 		BoutReal fpp = 0.25*(f(i,j,k) + f(i,j,kp) + f(i+1,j,k) + f(i+1,j,kp));
+// 		BoutReal fpm = 0.25*(f(i,j,k) + f(i+1,j,k) + f(i,j,km) + f(i+1,j,km));
+//
+// 		// 2) Calculate velocities on cell faces
+//
+// 		BoutReal vU = mesh->J(i,j)*(fmp - fpp)/mesh->dx(i,j); // -J*df/dx
+// 		BoutReal vD = mesh->J(i,j)*(fmm - fpm)/mesh->dx(i,j); // -J*df/dx
+//
+// 		BoutReal vR = 0.5*(mesh->J(i,j)+mesh->J(i+1,j))*(fpp - fpm)/mesh->dz; // J*df/dz
+// 		BoutReal vL = 0.5*(mesh->J(i,j)+mesh->J(i-1,j))*(fmp - fmm)/mesh->dz; // J*df/dz
+//
+// 	        //output.write("NEW: (%d,%d,%d) : (%e/%e, %e/%e)\n", i,j,k,vL,vR, vU,vD);
+//
+// 		// 3) Calculate n on the cell faces. The sign of the
+// 		//    velocity determines which side is used.
+//
+// 		// X direction
+// 		Stencil1D s;
+// 		s.c  = n(i,  j,k);
+// 		s.m  = n(i-1,j,k);
+// 		s.mm = n(i-2,j,k);
+// 		s.p  = n(i+1,j,k);
+// 		s.pp = n(i+2,j,k);
+//
+// 		//Upwind(s, mesh->dx(i,j));
+// 		//XPPM(s, mesh->dx(i,j));
+// 		Fromm(s, mesh->dx(i,j));
+//
+// 		// Right side
+// 		if((i==mesh->xend) && (mesh->lastX())) {
+// 			// At right boundary in X
+//
+// 			if(bndry_flux) {
+// 				BoutReal flux;
+// 				if(vR > 0.0) {
+// 					// Flux to boundary
+// 					flux = vR * s.R;
+// 				}else {
+// 					// Flux in from boundary
+// 					flux = vR * 0.5*(n(i+1,j,k) + n(i,j,k));
+// 				}
+// 				result(i,j,k)   += flux / (mesh->dx(i,j) * mesh->J(i,j));
+// 				result(i+1,j,k) -= flux / (mesh->dx(i+1,j) * mesh->J(i+1,j));
+// 			}
+// 		}else {
+// 			// Not at a boundary
+// 			if(vR > 0.0) {
+// 				// Flux out into next cell
+// 				BoutReal flux = vR * s.R;
+// 				result(i,j,k)   += flux / (mesh->dx(i,j) * mesh->J(i,j));
+// 				result(i+1,j,k) -= flux / (mesh->dx(i+1,j) * mesh->J(i+1,j));
+//
+// 				//if(i==mesh->xend)
+// 				//  output.write("Setting flux (%d,%d) : %e\n", j,k,result(i+1,j,k));
+// 			}
+// 		}
+//
+//         // Left side
+//
+// 		if((i==mesh->xstart) && (mesh->firstX())) {
+// 			// At left boundary in X
+// 			if(bndry_flux) {
+// 				BoutReal flux;
+// 				if(vL < 0.0) {
+// 					// Flux to boundary
+// 					flux = vL * s.L;
+// 				}else {
+// 					// Flux in from boundary
+// 					flux = vL * 0.5*(n(i-1,j,k) + n(i,j,k));
+// 				}
+// 				result(i,j,k)   -= flux / (mesh->dx(i,j) * mesh->J(i,j));
+// 				result(i-1,j,k) += flux / (mesh->dx(i-1,j) * mesh->J(i-1,j));
+// 			}
+// 		}else {
+// 			// Not at a boundary
+//
+// 			if(vL < 0.0) {
+// 				BoutReal flux = vL * s.L;
+// 				result(i,j,k)   -= flux / (mesh->dx(i,j) * mesh->J(i,j));
+// 				result(i-1,j,k) += flux / (mesh->dx(i-1,j) * mesh->J(i-1,j));
+// 			}
+// 		}
+//
+// 		/// NOTE: Need to communicate fluxes
+//
+// 		// Z direction
+// 		s.m  = n(i,j,km);
+// 		s.mm = n(i,j,kmm);
+// 		s.p  = n(i,j,kp);
+// 		s.pp = n(i,j,kpp);
+//
+// 		//Upwind(s, mesh->dz);
+// 		//XPPM(s, mesh->dz);
+// 		Fromm(s, mesh->dz);
+//
+// 		if(vU > 0.0) {
+// 			BoutReal flux = vU * s.R / (mesh->J(i,j)*mesh->dz);
+// 			result(i,j,k)   += flux;
+// 			result(i,j,kp)  -= flux;
+// 		}
+// 		if(vD < 0.0) {
+// 			BoutReal flux = vD * s.L / (mesh->J(i,j)*mesh->dz);
+// 			result(i,j,k)   -= flux;
+// 			result(i,j,km)  += flux;
+// 		}
+// 	}
+//
+// 	return result;
+// }
+
+BOUTMAIN(ltp);
