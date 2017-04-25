@@ -32,11 +32,12 @@ int ltp::init(bool restarting)
 	OPTION(options, evolve_Ng, true);
 	OPTION(options, mu_i, 0.5);// m^2 / Vs
 	OPTION(options, mu_e, 156.0);// m^2 / Vs
+	OPTION(options, ZZ, 1.0);// m^2 / Vs
 
 	// constants
 	Dn = 0.1;  // m2/s
 	De = 0.3;  // m2/s
-	Ti = 100;  // eV
+	Ti = .0285;  // eV
 	nu = 1.0; // charge exchange frequency
 
 	// Create laplacian solver
@@ -105,14 +106,14 @@ int ltp::rhs(BoutReal t) {
 
 	Ne = floor(Ne,1e-5);
 	Ni = floor(Ni,1e-5);
-	NeE = floor(Ne,1e-5);
+	NeE = floor(NeE,1e-5);
 	Ng = floor(Ng,1e-5);
 
 	// invert Poisson equation
 	TRACE("Potential inversion");
-	phi = phiSolver->solve(Ne-Ni);
+	phi = phiSolver->solve(Ne-ZZ*Ni);
 	mesh->communicate(phi);
-	phiext = phimag * linear * sin(Efreq * t);
+	phiext = phimag * linear * cos(Efreq * t);
 	total_phi = phi + phiext;
 	mesh->communicate(total_phi);
 
@@ -141,8 +142,8 @@ int ltp::rhs(BoutReal t) {
 	ddt(Ne) = 0.0;
 	if(evolve_Ne) {
 		// Electron density
-		ddt(Ne) += -Div_Perp_Lap_FV(-Ne*mu_e,total_phi,0.25*Ne*sqrt(Te));
-		ddt(Ne) += -Div_Perp_Lap_FV(Dn,Ne,zero);
+		ddt(Ne) += -Div_Perp_Lap_FV(Ne*mu_e,total_phi,0.25*Ne*sqrt(Te));
+		ddt(Ne) += -Div_Perp_Lap_FV(-Dn,Ne,zero);
 	}
 
 	// Ion continuity equation
@@ -150,8 +151,8 @@ int ltp::rhs(BoutReal t) {
 	ddt(Ni) = 0.0;
 	if(evolve_Ni) {
 		// Ion density
-		ddt(Ni) += -Div_Perp_Lap_FV(Ni*mu_i,total_phi,0.25*Ni*sqrt(Ti));
-		ddt(Ni) += -Div_Perp_Lap_FV(Dn,Ni,zero);
+		ddt(Ni) += -Div_Perp_Lap_FV(-Ni*mu_i,total_phi,0.25*Ni*sqrt(Ti));
+		ddt(Ni) += -Div_Perp_Lap_FV(-Dn,Ni,zero);
 	}
 
 	// Electron energy density equation
@@ -159,10 +160,10 @@ int ltp::rhs(BoutReal t) {
 	ddt(NeE) = 0.0;
 	if(evolve_NeE) {
 		// Energy density
-		ddt(NeE) += Div_Perp_Lap_FV(5./3.*NeE*mu_e,total_phi,5./12.*NeE*sqrt(Ti));
-		ddt(NeE) += -Div_Perp_Lap_FV(5./3.*E*Dn,Ne,zero);
-		ddt(NeE) += -Div_Perp_Lap_FV(5./3.*Ne*De,E,zero);
-		// ddt(NeE) += -Ne*mu_e*DDX(total_phi)*DDX(total_phi);
+		ddt(NeE) += -Div_Perp_Lap_FV(5./3.*NeE*mu_e,total_phi,5./12.*NeE*sqrt(Ti));
+		ddt(NeE) += -Div_Perp_Lap_FV(-5./3.*E*Dn,Ne,zero);
+		ddt(NeE) += -Div_Perp_Lap_FV(-5./3.*Ne*De,E,zero);
+		ddt(NeE) += -Ne*mu_e*SQ(DDX(total_phi));
 
 		// Energy source from interactions
 		nu = 0.0;
@@ -174,7 +175,7 @@ int ltp::rhs(BoutReal t) {
 				}
 			}
 		}
-		ddt(NeE) += 3. * Me/Mn * nu * Ne * (Te - Ti);
+		ddt(NeE) += -3. * Me/Mn * nu * Ne * (Te - Ti);
 	}
 
 	TRACE("Calculate neutral rates");
@@ -198,7 +199,7 @@ int ltp::rhs(BoutReal t) {
 	// Neutral pressure
 	TRACE("Neutral energy density");
 	if(evolve_NeE) {
-		ddt(NeE) -= Q + Rp; // originally Pe (NeTe), need to figure out how to make this for NeE -> (2./3) * (Q + Rp) originally
+		ddt(NeE) -= Q ;//+ Rp; // originally Pe (NeTe), need to figure out how to make this for NeE -> (2./3) * (Q + Rp) originally
 	}
 
 	return 0;

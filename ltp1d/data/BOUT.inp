@@ -4,8 +4,8 @@
 
 ##################################################
 # settings used by the core code
-NOUT = 100         # number of time-steps
-TIMESTEP = 0.5    # time between outputs
+NOUT = 500         # number of time-steps
+TIMESTEP = 0.05    # time between outputs
 
 # number of points in z direction (2^n + 1)
 ZMIN = 0.0
@@ -16,9 +16,11 @@ MXG = 2
 [mesh]
 nz = 2
 
-nx = 128
+nx = 260
 Lx = 0.03
+sigma = 0.2
 dx = Lx / (nx-4)
+#dx = Lx/(sigma*sqrt(2*PI)) * exp(-0.5*((x-0.5)/sigma)^2) / (nx-4) # non-uniform spacing, seems to break..
 
 ny = 2
 dy = 1
@@ -46,9 +48,10 @@ upwind = U1
 # mudq, mldq, mukeep, mlkeep preconditioner options
 ATOL = 1.0e-10 # absolute tolerance
 RTOL = 1.0e-5  # relative tolerance
+mxstep = 10000000
 
 [phiSolver]
-inner_boundary_flags = 0
+inner_boundary_flags = 0 # zero value BC
 outer_boundary_flags = 0
 
 all_terms = true
@@ -57,12 +60,23 @@ nonuniform = true   # NOTE: Necessary to avoid numerical instability
 ##################################################
 # settings for gas_compress
 [ltp]
-w0 = 1e8         # Hz
+# normalisations
+w0 = 13.56e6     # Hz
 n0 = 1e16        # m^-3
 L0 = 0.001       # m
 T0 = 10          # eV
-phimag = 3e2     # V
+v0 = 3e1 		 # V
+
+# electrode voltage and frequency
+phimag = 300     # V
 Efreq = 13.56e6  # Hz
+
+# mobility in m^2 / Vs
+mu_i = 0.5
+mu_e = 156.
+
+# ionisation charge state
+ZZ = 1
 
 evolve_Ne = true
 evolve_Ni = true
@@ -74,23 +88,22 @@ scale = 1.0 # default size of initial perturbations
 bndry_all = neumann # Set all boundaries to Neumann
 
 [Ng]
-scale = 1e17
+scale = 1e22
 function = 1.
 
 [Ne]
-scale = 1e16
-function = gauss(x-0.5)#1. #* gauss(z - PI, 0.5)
-#bndry_all = dirichlet
+scale = 1e14
+function = gauss(x-0.5,0.2)#1. #
 
 [Ni]
-scale = 1e16
-function = gauss(x-0.5)#1. #* gauss(z - PI, 0.5)
-#bndry_all = dirichlet
+scale = 1e14
+function = gauss(x-0.5,0.2)#1. # ,0.1
 
 [NeE]
-scale = 1e17
-function = 1. #* gauss(z - PI, 0.5)
+Te0 = 3 # eV
+scale = Ne:scale * Te0 * 3/2
+function = gauss(x-0.5,0.2)#1. # ,0.1
 
 [linear]
 xx = x#-0.5
-function = xx * gauss(PI-z) #xx * H(2*PI/3-z) * 2.5 * gauss(z - 2*PI/3) + xx * H(z-4*PI/3) * 2.5 * gauss(z - 4*PI/3) + xx * H(z-2*PI/3) * H(4*PI/3-z)
+function = xx #* gauss(PI-z) #xx * H(2*PI/3-z) * 2.5 * gauss(z - 2*PI/3) + xx * H(z-4*PI/3) * 2.5 * gauss(z - 4*PI/3) + xx * H(z-2*PI/3) * H(4*PI/3-z)

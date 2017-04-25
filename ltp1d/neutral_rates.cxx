@@ -51,35 +51,35 @@ void ltp::neutral_rates(const Field3D &Ne, const Field3D &Te, // Plasma quantiti
 				// Jacobian (Cross-sectional area)
 				BoutReal J_C = coords->J(i,j), J_L = 0.5*(coords->J(i,j-1) + coords->J(i,j)), J_R = 0.5*(coords->J(i,j) + coords->J(i,j+1));
 
-				///////////////////////////////////////////
-				// Charge exchange
-
-				BoutReal R_cx_L = Ne_L*Nn_L*hydrogen.chargeExchange(Te_L*T0) * (n0 / w0);
-				BoutReal R_cx_C = Ne_C*Nn_C*hydrogen.chargeExchange(Te_C*T0) * (n0 / w0);
-				BoutReal R_cx_R = Ne_R*Nn_R*hydrogen.chargeExchange(Te_R*T0) * (n0 / w0);
-
-				// Power transfer from plasma to neutrals
-				// Factor of 3/2 to convert temperature to energy
-
-				Q(i,j,k) =(3./2)* (
-		                        J_L * (Te_L - Tn_L)*R_cx_L
-		                   + 4.*J_C * (Te_C - Tn_C)*R_cx_C
-		                   +    J_R * (Te_R - Tn_R)*R_cx_R
-		                   ) / (6. * J_C);
-
-				// Plasma-neutral friction
-				F(i,j,k) =(
-				                J_L * (Vi_L - Vn_L)*R_cx_L
-				           + 4.*J_C * (Vi_C - Vn_C)*R_cx_C
-				           +    J_R * (Vi_R - Vn_R)*R_cx_R
-				           ) / (6. * J_C);
-
-				// Cell-averaged rate
-				Rcx(i,j,k) = (
-				                     J_L * R_cx_L
-				              + 4. * J_C * R_cx_C
-				              +      J_R * R_cx_R
-				              ) / (6. * J_C);
+				// ///////////////////////////////////////////
+				// // Charge exchange
+				//
+				// BoutReal R_cx_L = Ne_L*Nn_L*hydrogen.chargeExchange(Te_L*T0) * (n0 / w0);
+				// BoutReal R_cx_C = Ne_C*Nn_C*hydrogen.chargeExchange(Te_C*T0) * (n0 / w0);
+				// BoutReal R_cx_R = Ne_R*Nn_R*hydrogen.chargeExchange(Te_R*T0) * (n0 / w0);
+				//
+				// // Power transfer from plasma to neutrals
+				// // Factor of 3/2 to convert temperature to energy
+				//
+				// Q(i,j,k) =(3./2)* (
+		        //                 J_L * (Te_L - Tn_L)*R_cx_L
+		        //            + 4.*J_C * (Te_C - Tn_C)*R_cx_C
+		        //            +    J_R * (Te_R - Tn_R)*R_cx_R
+		        //            ) / (6. * J_C);
+				//
+				// // Plasma-neutral friction
+				// F(i,j,k) =(
+				//                 J_L * (Vi_L - Vn_L)*R_cx_L
+				//            + 4.*J_C * (Vi_C - Vn_C)*R_cx_C
+				//            +    J_R * (Vi_R - Vn_R)*R_cx_R
+				//            ) / (6. * J_C);
+				//
+				// // Cell-averaged rate
+				// Rcx(i,j,k) = (
+				//                      J_L * R_cx_L
+				//               + 4. * J_C * R_cx_C
+				//               +      J_R * R_cx_R
+				//               ) / (6. * J_C);
 
 				///////////////////////////////////////
 				// Recombination

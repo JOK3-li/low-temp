@@ -34,6 +34,7 @@ private:
 	// parameters
 	BoutReal mu_e, mu_i, Dn, De, Ti;
 	BoutReal w0, L0, n0, v0, T0;	// normalisations
+	int ZZ;
 	BoutReal phimag, Efreq;  // imposed field
 	bool evolve_Ne, evolve_Ni, evolve_NeE, evolve_Ng;
 
